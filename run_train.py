@@ -12,7 +12,7 @@ from typing import Dict, cast
 
 import numpy as np
 from nanotron import logging
-from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
+from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs, MixteraDatasetArgs
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.dataloader import (
     clm_process,
@@ -174,6 +174,67 @@ def get_dataloader_from_data_stage(
         )
 
         return train_dataloader
+    
+    # Case 3: Mixtera
+    elif isinstance(data.dataset, MixteraDatasetArgs):
+        tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+        log_rank(
+            f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        
+        from mixtera.hf import MixteraHFDataset
+        from mixtera.core.client import MixteraClient
+        from mixtera.core.query import Query
+        from nanotron import distributed as dist
+
+        if data.dataset.port:
+            client = MixteraClient.from_remote(data.dataset.path, data.dataset.port)
+        else:
+            client = MixteraClient.from_directory(data.dataset.path)
+
+        job_id = data.dataset.job_id
+        chunk_size = data.dataset.chunk_size
+        node_id = dist.get_rank(trainer.parallel_context.world_pg)
+        query = Query.for_job(job_id).select(tuple(data.dataset.query.split(" ")))
+        raw_dataset = MixteraHFDataset(client, query, job_id, chunk_size, node_id=node_id, tunnel_via_server=data.dataset.tunnel_via_server)
+
+        # The following is mostly copy&pasted from the huggingface case above, since `MixteraHFDataset` is a datasets.IterableDataset
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        # Check that tokenizer's vocab size is smaller than the model's vocab size
+        assert (
+            tokenizer.vocab_size <= trainer.model_config.vocab_size
+        ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
+
+        # We apply the Causal Language Modeling preprocessing
+        train_dataset = clm_process(
+            raw_dataset=raw_dataset,
+            tokenizer=tokenizer,
+            text_column_name="text", # by MixteraHFDataset implementation
+            dataset_processing_num_proc_per_process=-1, # will be ignored
+            dataset_overwrite_cache=False, # will be ignored
+            sequence_length=trainer.sequence_length,
+        )
+
+        # We load the processed dataset on the ranks requiring it
+        dataloader = get_train_dataloader(
+            train_dataset=train_dataset,
+            sequence_length=trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=trainer.micro_batch_size,
+            consumed_train_samples=consumed_train_samples, # TODO the whole restarting/checkpoint thing is not supported currently in Mixtera. Not sure what happens currently.
+            dataloader_num_workers=data.num_loading_workers,
+            seed_worker=data.seed,
+            dataloader_drop_last=True,
+        )
+
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 

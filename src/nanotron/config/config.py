@@ -106,12 +106,21 @@ class NanosetDatasetsArgs:
             self.dataset_path = list(tmp_dataset_path.keys())
             self.dataset_weights = list(tmp_dataset_path.values())
 
+@dataclass
+class MixteraDatasetArgs:
+    path: Union[str, Path]
+    port: Optional[int]
+    job_id: str
+    chunk_size: int
+    query: str
+    tunnel_via_server: bool
+
 
 @dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs]
+    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs, MixteraDatasetArgs]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
