@@ -175,7 +175,7 @@ def get_dataloader_from_data_stage(
 
         return train_dataloader
     
-    # Case 3: Mixtera
+    # Case 4: Mixtera
     elif isinstance(data.dataset, MixteraDatasetArgs):
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         log_rank(
@@ -186,20 +186,33 @@ def get_dataloader_from_data_stage(
         )
         
         from mixtera.hf import MixteraHFDataset
-        from mixtera.core.client import MixteraClient
-        from mixtera.core.query import Query
-        from nanotron import distributed as dist
+        from mixtera.core.client import MixteraClient, QueryExecutionArgs, ResultStreamingArgs
+        from mixtera.core.query import Query, ArbitraryMixture
 
         if data.dataset.port:
             client = MixteraClient.from_remote(data.dataset.path, data.dataset.port)
         else:
             client = MixteraClient.from_directory(data.dataset.path)
-
+        
         job_id = data.dataset.job_id
         chunk_size = data.dataset.chunk_size
-        node_id = dist.get_rank(trainer.parallel_context.world_pg)
+        tunnel_via_server = data.dataset.tunnel_via_server
+        total_nodes = trainer.parallel_context.world_pg.size()
+        data_parallel_size = trainer.parallel_context.data_parallel_size
+        assert data_parallel_size == trainer.parallel_context.dp_pg.size(), f"num_nodes_per_dp_group = {data_parallel_size} != trainer.parallel_context.dp_pg.size() = {trainer.parallel_context.dp_pg.size()}"
+        assert total_nodes % data_parallel_size == 0, f"total_nodes = {total_nodes} is not a multiple of data_parallel_size = {data_parallel_size}"
+        nodes_per_dp_group = total_nodes // data_parallel_size
+        assert nodes_per_dp_group == trainer.parallel_context.mp_pg.size(), f"nodes_per_dp_group = {nodes_per_dp_group} != trainer.parallel_context.mp_pg.size() = {trainer.parallel_context.mp_pg.size()}"
+        dp_group_id = trainer.parallel_context.dp_pg.rank()
+        assert dp_group_id < nodes_per_dp_group, f"dp_group_id = {dp_group_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
+        node_id = trainer.parallel_context.mp_pg.rank()
+        logger.info(f"There are {total_nodes} total nodes, {data_parallel_size} dp size => {nodes_per_dp_group} nodes per DP group. My dp group is {dp_group_id}, my node id is {node_id}")
+        assert node_id < nodes_per_dp_group, f"node_id = {node_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
+
+        query_execution_args = QueryExecutionArgs(mixture=ArbitraryMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
+        streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server)
         query = Query.for_job(job_id).select(tuple(data.dataset.query.split(" ")))
-        raw_dataset = MixteraHFDataset(client, query, job_id, chunk_size, node_id=node_id, tunnel_via_server=data.dataset.tunnel_via_server)
+        raw_dataset = MixteraHFDataset(client, query, query_execution_args, streaming_args)
 
         # The following is mostly copy&pasted from the huggingface case above, since `MixteraHFDataset` is a datasets.IterableDataset
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
