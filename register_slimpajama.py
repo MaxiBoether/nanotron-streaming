@@ -12,7 +12,7 @@ def parsing_func(sample):
     import json
     return json.loads(sample)["text"]
 
-if __name__ == "main":
+if __name__ == "__main__":
     client = MixteraClient.from_remote("localhost", 8888)
 
     client.register_metadata_parser("SLIMPAJAMA_PARSER", SlimPajamaParser)
