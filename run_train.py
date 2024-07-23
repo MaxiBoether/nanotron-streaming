@@ -94,7 +94,7 @@ def get_dataloader_from_data_stage(
                 hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
                 hf_dataset_config_name=data.dataset.hf_dataset_config_name,
                 splits=data.dataset.hf_dataset_splits,
-                streaming_hf = True # Testing an IterableDataset
+                streaming_hf = False # Testing an IterableDataset
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -211,7 +211,9 @@ def get_dataloader_from_data_stage(
 
         query_execution_args = QueryExecutionArgs(mixture=ArbitraryMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
         streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server)
-        query = Query.for_job(job_id).select(tuple(data.dataset.query.split(" ")))
+        query = Query.for_job(job_id)
+        if data.dataset.query.strip() != "":
+            query = query.select(tuple(data.dataset.query.split(" ")))
         raw_dataset = MixteraHFDataset(client, query, query_execution_args, streaming_args)
 
         # The following is mostly copy&pasted from the huggingface case above, since `MixteraHFDataset` is a datasets.IterableDataset

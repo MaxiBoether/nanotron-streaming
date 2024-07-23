@@ -112,7 +112,7 @@ class MixteraDatasetArgs:
     port: Optional[int]
     job_id: str
     chunk_size: int
-    query: str
+    query: str = ""
     tunnel_via_server: bool
 
 
