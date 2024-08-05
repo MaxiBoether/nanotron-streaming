@@ -11,6 +11,7 @@ import argparse
 from typing import Dict, cast
 
 import numpy as np
+import os
 from nanotron import logging
 from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs, MixteraDatasetArgs
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
@@ -40,6 +41,8 @@ except ImportError:
 
 logger = logging.get_logger(__name__)
 
+# Query execution in Mixtera takes long, and NCCL would time out otherwise.
+os.environ["NCCL_TIMEOUT"] = str(30 * 60 * 1000)
 
 def get_dataloader_from_data_stage(
     trainer: DistributedTrainer,
@@ -94,7 +97,7 @@ def get_dataloader_from_data_stage(
                 hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
                 hf_dataset_config_name=data.dataset.hf_dataset_config_name,
                 splits=data.dataset.hf_dataset_splits,
-                streaming_hf = False # Testing an IterableDataset
+                streaming_hf = data.dataset.use_streaming_interface
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -177,6 +180,8 @@ def get_dataloader_from_data_stage(
     
     # Case 4: Mixtera
     elif isinstance(data.dataset, MixteraDatasetArgs):
+        # Query execution in Mixtera takes long, and NCCL would time out otherwise.
+        os.environ["NCCL_TIMEOUT"] = str(30 * 60 * 1000)
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         log_rank(
             f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
@@ -197,6 +202,10 @@ def get_dataloader_from_data_stage(
         job_id = data.dataset.job_id
         chunk_size = data.dataset.chunk_size
         tunnel_via_server = data.dataset.tunnel_via_server
+        chunk_reading_degree_of_parallelism = data.dataset.chunk_reading_degree_of_parallelism
+        chunk_reading_per_window_mixture = data.dataset.chunk_reading_per_window_mixture
+        chunk_reading_window_size = data.dataset.chunk_reading_window_size
+
         total_nodes = trainer.parallel_context.world_pg.size()
         data_parallel_size = trainer.parallel_context.data_parallel_size
         assert data_parallel_size == trainer.parallel_context.dp_pg.size(), f"num_nodes_per_dp_group = {data_parallel_size} != trainer.parallel_context.dp_pg.size() = {trainer.parallel_context.dp_pg.size()}"
@@ -210,10 +219,14 @@ def get_dataloader_from_data_stage(
         assert node_id < nodes_per_dp_group, f"node_id = {node_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
 
         query_execution_args = QueryExecutionArgs(mixture=ArbitraryMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
-        streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server)
+        streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
+
         query = Query.for_job(job_id)
-        if data.dataset.query.strip() != "":
+        if data.dataset.query is not None and data.dataset.query.strip() != "":
             query = query.select(tuple(data.dataset.query.split(" ")))
+        else:
+            query = query.select(None)
+
         raw_dataset = MixteraHFDataset(client, query, query_execution_args, streaming_args)
 
         # The following is mostly copy&pasted from the huggingface case above, since `MixteraHFDataset` is a datasets.IterableDataset

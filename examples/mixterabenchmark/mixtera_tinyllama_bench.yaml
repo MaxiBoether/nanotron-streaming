@@ -11,8 +11,10 @@ data_stages:
       port: 8888
       job_id: nanotron_benchmark
       chunk_size: 64000 # vary
-      query:  # no query for benchmark
       tunnel_via_server: false # vary
+      chunk_reading_degree_of_parallelism: 8
+      chunk_reading_per_window_mixture: False
+      chunk_reading_window_size: 512
     num_loading_workers: 0 # vary
     seed: 42
   name: Stable Training Stage

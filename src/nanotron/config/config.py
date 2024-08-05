@@ -83,6 +83,7 @@ class PretrainDatasetsArgs:
     dataset_processing_num_proc_per_process: Optional[int] = 1
     dataset_overwrite_cache: Optional[bool] = False
     text_column_name: Optional[str] = None
+    use_streaming_interface: bool = False
 
     def __post_init__(self):
         if self.text_column_name is None:
@@ -113,7 +114,10 @@ class MixteraDatasetArgs:
     job_id: str
     chunk_size: int
     tunnel_via_server: bool
-    query: str = ""
+    query: None | str = ""
+    chunk_reading_degree_of_parallelism: int = 0
+    chunk_reading_per_window_mixture: bool = False
+    chunk_reading_window_size: int = 128
 
 @dataclass
 class DataArgs:

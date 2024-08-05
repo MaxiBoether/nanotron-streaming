@@ -13,6 +13,7 @@ data_stages:
       hf_dataset_or_datasets: /scratch/maximilian.boether/mixtera/slimpajama
       hf_dataset_splits: train
       text_column_name: text
+      use_streaming_interface: false
     num_loading_workers: 0 # vary
     seed: 42
   name: Stable Training Stage
