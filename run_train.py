@@ -192,7 +192,8 @@ def get_dataloader_from_data_stage(
         
         from mixtera.hf import MixteraHFDataset
         from mixtera.core.client import MixteraClient, QueryExecutionArgs, ResultStreamingArgs
-        from mixtera.core.query import Query, ArbitraryMixture
+        from mixtera.core.query import Query
+        from mixtera.core.query.mixture import InferringMixture
 
         if data.dataset.port:
             client = MixteraClient.from_remote(data.dataset.path, data.dataset.port)
@@ -218,7 +219,7 @@ def get_dataloader_from_data_stage(
         logger.info(f"There are {total_nodes} total nodes, {data_parallel_size} dp size => {nodes_per_dp_group} nodes per DP group. My dp group is {dp_group_id}, my node id is {node_id}")
         assert node_id < nodes_per_dp_group, f"node_id = {node_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
 
-        query_execution_args = QueryExecutionArgs(mixture=ArbitraryMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
+        query_execution_args = QueryExecutionArgs(mixture=InferringMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
         streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
 
         query = Query.for_job(job_id)
