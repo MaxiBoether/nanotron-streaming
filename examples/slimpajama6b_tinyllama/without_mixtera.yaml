@@ -23,7 +23,7 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: true
-  project: mixterabench # wandb project name
+  project: slimpj6b # wandb project name
   run: mixtera_bench_%date_%jobid
   seed: 42
   step: null
