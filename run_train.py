@@ -214,7 +214,7 @@ def get_dataloader_from_data_stage(
         nodes_per_dp_group = total_nodes // data_parallel_size
         assert nodes_per_dp_group == trainer.parallel_context.mp_pg.size(), f"nodes_per_dp_group = {nodes_per_dp_group} != trainer.parallel_context.mp_pg.size() = {trainer.parallel_context.mp_pg.size()}"
         dp_group_id = trainer.parallel_context.dp_pg.rank()
-        assert dp_group_id < nodes_per_dp_group, f"dp_group_id = {dp_group_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
+        assert dp_group_id < data_parallel_size, f"dp_group_id = {dp_group_id} NOT < data_parallel_size = {data_parallel_size}"
         node_id = trainer.parallel_context.mp_pg.rank()
         logger.info(f"There are {total_nodes} total nodes, {data_parallel_size} dp size => {nodes_per_dp_group} nodes per DP group. My dp group is {dp_group_id}, my node id is {node_id}")
         assert node_id < nodes_per_dp_group, f"node_id = {node_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
