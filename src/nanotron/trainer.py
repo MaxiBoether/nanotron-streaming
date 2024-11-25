@@ -578,27 +578,29 @@ class DistributedTrainer:
 
         # TODO (MaxiBoether): In which group should we perform all reduce here?! The loss only lives on the output stages of the pipeline, and we might use tensor parallelism.
         # It seems super fishy to access loss.pp_block and not sure whether this works with 3D parallelism.
-        losses_per_domain, counts_per_domain = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
-        self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
-        domain_ids = list(losses_per_domain.keys())
-        local_max_domain_id = max(domain_ids) if domain_ids else -1
-        local_max_id_tensor = torch.tensor([local_max_domain_id], device='cuda')
-        global_max_id_tensor = local_max_id_tensor.clone()
-        dist.all_reduce(global_max_id_tensor, op=dist.ReduceOp.MAX, group=self.parallel_context.world_pg)
-        max_domain_id = global_max_id_tensor.item()
+        if hasattr(self.unwrapped_model.loss, "pp_block"): # only true on outline pipeline stages
+            losses_per_domain, counts_per_domain = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
+            log_rank(f"losses_per_domain = {losses_per_domain}\ncounts_per_domain = {counts_per_domain}", logger=logger, level=logging.WARNING)
+            self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
+            domain_ids = list(losses_per_domain.keys())
+            local_max_domain_id = max(domain_ids) if domain_ids else -1
+            local_max_id_tensor = torch.tensor([local_max_domain_id], device='cuda')
+            global_max_id_tensor = local_max_id_tensor.clone()
+            dist.all_reduce(global_max_id_tensor, op=dist.ReduceOp.MAX, group=self.parallel_context.dp_pg)
+            max_domain_id = global_max_id_tensor.item()
 
-        if max_domain_id >= 0:
-            losses_tensor = torch.zeros(max_domain_id + 1, device='cuda')
-            counts_tensor = torch.zeros(max_domain_id + 1, device='cuda')
+            if max_domain_id >= 0:
+                losses_tensor = torch.zeros(max_domain_id + 1, device='cuda')
+                counts_tensor = torch.zeros(max_domain_id + 1, device='cuda')
 
-            for domain_id in domain_ids:
-                losses_tensor[domain_id] = losses_per_domain[domain_id]
-                counts_tensor[domain_id] = counts_per_domain[domain_id]
+                for domain_id in domain_ids:
+                    losses_tensor[domain_id] = losses_per_domain[domain_id]
+                    counts_tensor[domain_id] = counts_per_domain[domain_id]
 
-            dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, group=self.parallel_context.world_pg)
-            dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, group=self.parallel_context.world_pg)
-
-            log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}", logger=logger, level=logging.WARNING, group=self.parallel_context.world_pg, rank=0)
+                dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, group=self.parallel_context.dp_pg)
+                dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, group=self.parallel_context.dp_pg)
+                avg_loss = torch.sum(losses_tensor) / torch.sum(counts_tensor)
+                log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\navg_loss = {avg_loss}", logger=logger, level=logging.WARNING)
 
         # Apply gradient
         self.optimizer.step()

@@ -981,26 +981,27 @@ class Loss(nn.Module):
         # TODO(MaxiBoether): How about tensor parallelism here? Do we need to do sth about it?
         # BEGIN CHANGES FOR PER-KEY LOSS
         if key_ids is not None:
-            # Flatten tensors
-            per_token_loss_flat = loss.view(-1)  # [(batch_size * seq_length)]
-            domain_ids_flat = key_ids.view(-1)
-            label_mask_flat = label_mask.view(-1)
+            with torch.no_grad():
+                # Flatten tensors
+                per_token_loss_flat = loss.view(-1)  # [(batch_size * seq_length)]
+                domain_ids_flat = key_ids.view(-1)
+                label_mask_flat = label_mask.view(-1)
 
-            # Only consider valid positions (where label_mask is 1)
-            valid_positions = label_mask_flat.bool()
-            per_token_loss_flat = per_token_loss_flat[valid_positions]
-            domain_ids_flat = domain_ids_flat[valid_positions]
+                # Only consider valid positions (where label_mask is 1)
+                valid_positions = label_mask_flat.bool()
+                per_token_loss_flat = per_token_loss_flat[valid_positions]
+                domain_ids_flat = domain_ids_flat[valid_positions]
 
-            # Gather unique domain_ids
-            unique_domain_ids = domain_ids_flat.unique()
+                # Gather unique domain_ids
+                unique_domain_ids = domain_ids_flat.unique()
 
-            # Compute per-domain losses and counts
-            for domain_id in unique_domain_ids:
-                domain_mask = domain_ids_flat == domain_id
-                domain_loss = per_token_loss_flat[domain_mask].sum()
-                domain_count = domain_mask.sum()
-                self.losses_per_domain[domain_id.item()] += domain_loss.item()
-                self.counts_per_domain[domain_id.item()] += domain_count.item()
+                # Compute per-domain losses and counts
+                for domain_id in unique_domain_ids:
+                    domain_mask = domain_ids_flat == domain_id
+                    domain_loss = per_token_loss_flat[domain_mask].sum()
+                    domain_count = domain_mask.sum()
+                    self.losses_per_domain[domain_id.item()] += domain_loss.item()
+                    self.counts_per_domain[domain_id.item()] += domain_count.item()
         # END CHANGES FOR PER-KEY LOSS
 
         # I think indexing causes a sync we don't actually want
