@@ -576,35 +576,31 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
-        # TODO (MaxiBoether): In which group should we perform all reduce here?! The loss only lives on the output stages of the pipeline, and we might use tensor parallelism.
-        # It seems super fishy to access loss.pp_block and not sure whether this works with 3D parallelism.
+        # TODO what i also dont understand is: in the regular log case, that should only be avilable on the last pipeline stage as well, right? how is the loss logged then on rank 0 / how is it transferred around.
+        # train_step_logs directly prints the loss tensor, which would imply loss_avg is defined on pp 0
+        # need to investigate this with pp=2. what is loss, what is the pp stage? if pp=0 and loss is defined, why? is it is undefined, how does it get to the log? in the end, we need to move the losses/counts tensors (or dicts made out of it) to the mixtera server, in the best case from node 0, and hence we need to figure out how to get it there.
 
         handle_losses = None
         handle_counts = None
         if hasattr(self.unwrapped_model.loss, "pp_block"): # only true on outline pipeline stages
             if dist.get_rank(self.parallel_context.tp_pg) == 0: # only need to do this once per tp stage:
                 with torch.no_grad():
-                    losses_per_domain, counts_per_domain = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
-                    log_rank(f"losses_per_domain = {losses_per_domain}\ncounts_per_domain = {counts_per_domain}", logger=logger, level=logging.WARNING)
+                    losses_tensor, counts_tensor, max_id_tensor = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
                     self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
-                    domain_ids = list(losses_per_domain.keys())
-                    local_max_domain_id = max(domain_ids) if domain_ids else -1
-                    local_max_id_tensor = torch.tensor([local_max_domain_id], device='cuda')
-                    global_max_id_tensor = local_max_id_tensor.clone()
-                    dist.all_reduce(global_max_id_tensor, op=dist.ReduceOp.MAX, group=self.parallel_context.dp_pg)
-                    max_domain_id = global_max_id_tensor.item()
 
-                    if max_domain_id >= 0:
-                        # TODO dtype?
-                        losses_tensor = torch.zeros(max_domain_id + 1, device='cuda')
-                        counts_tensor = torch.zeros(max_domain_id + 1, device='cuda')
+                    log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}", logger=logger, level=logging.WARNING)
+                    dist.all_reduce(max_id_tensor, op=dist.ReduceOp.MAX, group=self.parallel_context.dp_pg)
+                    max_domain_id = max_id_tensor.item()
+                    # Resize tensors to the maximum domain ID
+                    if losses_tensor.size(0) < max_domain_id + 1:
+                        new_size = max_domain_id + 1 - losses_tensor.size(0)
+                        losses_tensor = torch.cat(
+                            [losses_tensor, torch.zeros(new_size, dtype=torch.float32, device=losses_tensor.device)], dim=0)
+                        counts_tensor = torch.cat(
+                            [counts_tensor, torch.zeros(new_size, dtype=torch.int64, device=counts_tensor.device)], dim=0)
 
-                        for domain_id in domain_ids:
-                            losses_tensor[domain_id] = losses_per_domain[domain_id]
-                            counts_tensor[domain_id] = counts_per_domain[domain_id]
-
-                        handle_losses = dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
-                        handle_counts = dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
+                    handle_losses = dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
+                    handle_counts = dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
 
         # Apply gradient
         self.optimizer.step()
@@ -622,8 +618,7 @@ class DistributedTrainer:
             handle_losses.wait()
             handle_counts.wait()
             avg_loss = torch.sum(losses_tensor) / torch.sum(counts_tensor)
-            log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\navg_loss = {avg_loss.item()}", logger=logger, level=logging.WARNING)
-
+            log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}\navg_loss = {avg_loss.item()}", logger=logger, level=logging.WARNING)
 
         self.post_train_step()
 

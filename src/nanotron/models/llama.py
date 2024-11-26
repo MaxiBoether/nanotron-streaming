@@ -959,8 +959,10 @@ class Loss(nn.Module):
     def __init__(self, tp_pg: dist.ProcessGroup):
         super().__init__()
         self.tp_pg = tp_pg
-        self.losses_per_domain = defaultdict(float)
-        self.counts_per_domain = defaultdict(int)
+        self._default_domains = 32
+        self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32)
+        self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.float32)
+        self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64)
 
     def forward(
         self,
@@ -978,12 +980,11 @@ class Loss(nn.Module):
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         final_loss = masked_mean(loss, label_mask, dtype=torch.float)
 
-        # TODO(MaxiBoether): How about tensor parallelism here? Do we need to do sth about it?
         # BEGIN CHANGES FOR PER-KEY LOSS
         if key_ids is not None:
             with torch.no_grad():
-                # Flatten tensors
-                per_token_loss_flat = loss.view(-1)  # [(batch_size * seq_length)]
+                # Flatten tensors, i.e. remove batch dimensions etc
+                per_token_loss_flat = loss.view(-1)
                 domain_ids_flat = key_ids.view(-1)
                 label_mask_flat = label_mask.view(-1)
 
@@ -992,16 +993,29 @@ class Loss(nn.Module):
                 per_token_loss_flat = per_token_loss_flat[valid_positions]
                 domain_ids_flat = domain_ids_flat[valid_positions]
 
-                # Gather unique domain_ids
+                # Gather unique and max domain_ids
                 unique_domain_ids = domain_ids_flat.unique()
+                batch_max_domain_id = unique_domain_ids.max()
+
+                # Adjust tensors if necessary
+                if batch_max_domain_id > self.max_domain_id:
+                    self.max_domain_id = batch_max_domain_id
+
+                num_domains = self.max_domain_id + 1
+                self._default_domains = num_domains # Ensure that after reset, we don't necessarily resize again.
+
+                if self.losses_tensor.size(0) < num_domains:
+                    new_size = num_domains - self.losses_tensor.size(0)
+                    self.losses_tensor = torch.cat(
+                        [self.losses_tensor,
+                         torch.zeros(new_size, dtype=torch.float32, device=self.losses_tensor.device)], dim=0)
+                    self.counts_tensor = torch.cat(
+                        [self.counts_tensor,
+                         torch.zeros(new_size, dtype=torch.int64, device=self.counts_tensor.device)], dim=0)
 
                 # Compute per-domain losses and counts
-                for domain_id in unique_domain_ids:
-                    domain_mask = domain_ids_flat == domain_id
-                    domain_loss = per_token_loss_flat[domain_mask].sum()
-                    domain_count = domain_mask.sum()
-                    self.losses_per_domain[domain_id.item()] += domain_loss.item()
-                    self.counts_per_domain[domain_id.item()] += domain_count.item()
+                self.losses_tensor.index_add_(0, domain_ids_flat, per_token_loss_flat)
+                self.counts_tensor.index_add_(0, domain_ids_flat, torch.ones_like(domain_ids_flat, dtype=torch.int64))
         # END CHANGES FOR PER-KEY LOSS
 
         # I think indexing causes a sync we don't actually want
@@ -1009,16 +1023,12 @@ class Loss(nn.Module):
         return {"loss": final_loss}
     
     def get_per_domain_stats(self):
-        # Return copies to avoid mutation
-        return (
-            self.losses_per_domain.copy(),
-            self.counts_per_domain.copy(),
-        )
+        return self.losses_tensor.clone(), self.counts_tensor.clone(), self.max_domain_id.clone()
 
     def reset_per_domain_stats(self):
-        self.losses_per_domain.clear()
-        self.counts_per_domain.clear()
-
+        self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32)
+        self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.float32)
+        self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64)
 
 class LlamaForTraining(NanotronModel):
     def __init__(
