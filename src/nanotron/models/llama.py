@@ -1004,9 +1004,9 @@ class Loss(nn.Module):
                 # Adjust tensors if necessary
                 if batch_max_domain_id > self.max_domain_id:
                     self.max_domain_id = batch_max_domain_id
-
+                    self._default_domains = self.max_domain_id + 1 # Ensure that after reset, we don't necessarily resize again.
+                    
                 num_domains = self.max_domain_id + 1
-                self._default_domains = num_domains # Ensure that after reset, we don't necessarily resize again.
 
                 if self.losses_tensor.size(0) < num_domains:
                     new_size = num_domains - self.losses_tensor.size(0)

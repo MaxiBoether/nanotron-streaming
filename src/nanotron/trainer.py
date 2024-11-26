@@ -586,18 +586,18 @@ class DistributedTrainer:
             if dist.get_rank(self.parallel_context.tp_pg) == 0: # only need to do this once per tp stage:
                 with torch.no_grad():
                     losses_tensor, counts_tensor, max_id_tensor = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
+                    max_handle = dist.all_reduce(max_id_tensor, op=dist.ReduceOp.MAX, async_op=True, group=self.parallel_context.dp_pg)
                     self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
-
-                    log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}", logger=logger, level=logging.WARNING)
-                    dist.all_reduce(max_id_tensor, op=dist.ReduceOp.MAX, group=self.parallel_context.dp_pg)
+                    #log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}", logger=logger, level=logging.WARNING)
+                    max_handle.wait()
                     max_domain_id = max_id_tensor.item()
                     # Resize tensors to the maximum domain ID
                     if losses_tensor.size(0) < max_domain_id + 1:
                         new_size = max_domain_id + 1 - losses_tensor.size(0)
                         losses_tensor = torch.cat(
-                            [losses_tensor, torch.zeros(new_size, dtype=torch.float32, device=losses_tensor.device)], dim=0)
+                            [losses_tensor, torch.zeros(new_size, dtype=losses_tensor.dtype, device=losses_tensor.device)], dim=0)
                         counts_tensor = torch.cat(
-                            [counts_tensor, torch.zeros(new_size, dtype=torch.int64, device=counts_tensor.device)], dim=0)
+                            [counts_tensor, torch.zeros(new_size, dtype=counts_tensor.dtype, device=counts_tensor.device)], dim=0)
 
                     handle_losses = dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
                     handle_counts = dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
