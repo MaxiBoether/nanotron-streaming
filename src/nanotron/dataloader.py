@@ -370,7 +370,7 @@ def clm_process(
         mapping_function,
         input_columns=input_columns,
         remove_columns=raw_dataset.column_names,
-        features=features,
+        features=Features(features),
         batched=True,
         **additional_args
     )
