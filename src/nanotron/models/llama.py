@@ -960,9 +960,11 @@ class Loss(nn.Module):
         super().__init__()
         self.tp_pg = tp_pg
         self._default_domains = 32
+        # We should not lazy init the loss tensor to support BFloat16 here.
         self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.float32)
-        self.max_domain_id = None 
-        self.counts_tensor = None 
+        self.max_domain_id: Optional[torch.Tensor] = None 
+        self.counts_tensor: Optional[torch.Tensor] = None 
+        self.has_per_domain_loss = False
 
     def forward(
         self,
@@ -983,6 +985,7 @@ class Loss(nn.Module):
         # BEGIN CHANGES FOR PER-KEY LOSS
         if key_ids is not None:
             with torch.no_grad():
+                self.has_per_domain_loss = True
                 # Lazy init, necessary because otherwise those couting tensors are converted to BFloat16.
                 self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32) if self.max_domain_id is None else self.max_domain_id
                 self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64) if self.counts_tensor is None else self.counts_tensor
@@ -1005,7 +1008,7 @@ class Loss(nn.Module):
                 if batch_max_domain_id > self.max_domain_id:
                     self.max_domain_id = batch_max_domain_id
                     self._default_domains = self.max_domain_id + 1 # Ensure that after reset, we don't necessarily resize again.
-                    
+
                 num_domains = self.max_domain_id + 1
 
                 if self.losses_tensor.size(0) < num_domains:

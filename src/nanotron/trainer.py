@@ -583,12 +583,14 @@ class DistributedTrainer:
         handle_losses = None
         handle_counts = None
         if hasattr(self.unwrapped_model.loss, "pp_block"): # only true on outline pipeline stages
-            if dist.get_rank(self.parallel_context.tp_pg) == 0: # only need to do this once per tp stage:
+            loss_block = self.unwrapped_model.loss.pp_block
+            if loss_block.has_per_domain_loss and dist.get_rank(self.parallel_context.tp_pg) == 0: # only need to do this once per tp stage
                 with torch.no_grad():
-                    losses_tensor, counts_tensor, max_id_tensor = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
+                    losses_tensor, counts_tensor, max_id_tensor = loss_block.get_per_domain_stats()
                     max_handle = dist.all_reduce(max_id_tensor, op=dist.ReduceOp.MAX, async_op=True, group=self.parallel_context.dp_pg)
                     self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
-                    #log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}", logger=logger, level=logging.WARNING)
+                    # Debug log, adds synchronization
+                    # log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}", logger=logger, level=logging.WARNING)
                     max_handle.wait()
                     max_domain_id = max_id_tensor.item()
                     # Resize tensors to the maximum domain ID

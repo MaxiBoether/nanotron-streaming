@@ -289,7 +289,8 @@ def clm_process(
     dataset_processing_num_proc_per_process: int,
     dataset_overwrite_cache: bool,
     sequence_length: int,
-    batch_size: int | None = None
+    batch_size: int | None = None,
+    return_key_ids: bool = True
 ):
     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
@@ -311,23 +312,20 @@ def clm_process(
         return result
 
     def _tokenize_and_group_texts(texts: List[str], keys: List[int] = None) -> Dict[str, List[np.ndarray]]:
-        if keys is None:
-            keys = [0] * len(texts)
-
         tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
         # At this point, tokenized_batch is a dictionary with keys like 'input_ids', 'attention_mask' etc.
         # tokenized_batch['input_ids'] is a list of lists, where each inner list contains token IDs for one input text.
         input_ids_list = tokenized_batch['input_ids']
         input_ids_array = np.concatenate([np.array(ids) for ids in input_ids_list])
-        # Similarly, create domain_ids_array using vectorized operations
-        lengths = np.array([len(ids) for ids in input_ids_list])
-        keys_array = np.array(keys)
-        domain_ids_array = np.repeat(keys_array, lengths)
+        examples = { "input_ids": input_ids_array }
+        
+        if keys is not None:
+            # Similarly, create domain_ids_array using vectorized operations
+            lengths = np.array([len(ids) for ids in input_ids_list])
+            keys_array = np.array(keys)
+            domain_ids_array = np.repeat(keys_array, lengths)
+            examples["key_ids"] = domain_ids_array
 
-        examples = {
-            "input_ids": input_ids_array,
-            "key_ids": domain_ids_array,
-        }
         grouped = group_texts(examples)
         return grouped
 
@@ -355,18 +353,24 @@ def clm_process(
     def mapping_function(texts):
         return _tokenize_and_group_texts(texts)
     
-    if "key_id" in raw_dataset.column_names:
-        # Provided by e.g. Mixtera.
-        input_columns = [text_column_name, 'key_id']
-        def mapping_function(texts, keys):
-            return _tokenize_and_group_texts(texts, keys)
+    features = {"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}
+                            
+    if return_key_ids:
+        if "key_id" in raw_dataset.column_names:
+            # Provided by e.g. Mixtera.
+            input_columns = [text_column_name, 'key_id']
+            def mapping_function(texts, keys):
+                return _tokenize_and_group_texts(texts, keys)
+            features["key_ids"] = Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)
+        else:
+            raise RuntimeError(f"return_key_ids = True but input column names do not contain key_id: {raw_dataset.column_names}")
+
 
     train_dataset = raw_dataset.map(
         mapping_function,
         input_columns=input_columns,
         remove_columns=raw_dataset.column_names,
-        features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1),
-                           "key_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
+        features=features,
         batched=True,
         **additional_args
     )
@@ -407,14 +411,13 @@ class DataCollatorForCLM:
             }
 
         # Make sure we load only what's necessary, ie we only load a `input_ids` column.
-        assert all(list(example.keys()) == ["input_ids", "key_ids"] for example in examples)
+        assert all(set(example.keys()) <= {"input_ids", "key_ids"} for example in examples)
 
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
-        key_ids = np.vstack([example["key_ids"] for example in examples])
         batch_size, expanded_input_length = input_ids.shape
 
-        assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape}"
+        have_key_ids = any("key_ids" in example for example in examples)
 
         result: Dict[str, Union[np.ndarray, TensorPointer]] = {}
 
@@ -422,7 +425,10 @@ class DataCollatorForCLM:
         result["input_mask"] = TensorPointer(group_rank=self.input_pp_rank)
         result["label_ids"] = TensorPointer(group_rank=self.output_pp_rank)
         result["label_mask"] = TensorPointer(group_rank=self.output_pp_rank)
-        result["key_ids"] = TensorPointer(group_rank=self.output_pp_rank)
+        if have_key_ids:
+            key_ids = np.vstack([example["key_ids"] for example in examples])
+            assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape}"
+            result["key_ids"] = TensorPointer(group_rank=self.output_pp_rank)
 
         assert (
             expanded_input_length == self.sequence_length + 1
@@ -437,7 +443,8 @@ class DataCollatorForCLM:
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
             result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
-            result["key_ids"] = key_ids[:, 1:]
+            if have_key_ids:
+                result["key_ids"] = key_ids[:, 1:]
 
         if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
             raise ValueError(
@@ -449,7 +456,7 @@ class DataCollatorForCLM:
                 f"`labels` are incorrectly preprocessed. `labels` length is {result['label_ids'].shape[-1]}, but should be"
                 f" {self.sequence_length}."
             )
-        if isinstance(result["key_ids"], torch.Tensor) and result["key_ids"].shape[-1] != self.sequence_length:
+        if have_key_ids and isinstance(result["key_ids"], torch.Tensor) and result["key_ids"].shape[-1] != self.sequence_length:
             raise ValueError(
                 f"`keys` are incorrectly preprocessed. `keys` length is {result['key_ids'].shape[-1]}, but should be"
                 f" {self.sequence_length}."
