@@ -960,9 +960,9 @@ class Loss(nn.Module):
         super().__init__()
         self.tp_pg = tp_pg
         self._default_domains = 32
-        self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32)
         self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.float32)
-        self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64)
+        self.max_domain_id = None 
+        self.counts_tensor = None 
 
     def forward(
         self,
@@ -983,6 +983,10 @@ class Loss(nn.Module):
         # BEGIN CHANGES FOR PER-KEY LOSS
         if key_ids is not None:
             with torch.no_grad():
+                # Lazy init, necessary because otherwise those couting tensors are converted to BFloat16.
+                self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32) if self.max_domain_id is None else self.max_domain_id
+                self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64) if self.counts_tensor is None else self.counts_tensor
+
                 # Flatten tensors, i.e. remove batch dimensions etc
                 per_token_loss_flat = loss.view(-1)
                 domain_ids_flat = key_ids.view(-1)
@@ -1026,9 +1030,11 @@ class Loss(nn.Module):
         return self.losses_tensor.clone(), self.counts_tensor.clone(), self.max_domain_id.clone()
 
     def reset_per_domain_stats(self):
-        self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32)
-        self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.float32)
-        self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64)
+        self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=self.losses_tensor.dtype)
+        self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=self.max_domain_id.dtype)
+        self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=self.counts_tensor.dtype)
+        assert self.max_domain_id.dtype == torch.int32
+        assert self.counts_tensor.dtype == torch.int64
 
 class LlamaForTraining(NanotronModel):
     def __init__(
