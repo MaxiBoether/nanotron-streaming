@@ -290,7 +290,7 @@ def clm_process(
     dataset_overwrite_cache: bool,
     sequence_length: int,
     batch_size: int | None = None,
-    return_key_ids: bool = True
+    return_key_ids: bool = False
 ):
     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
