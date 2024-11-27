@@ -582,6 +582,8 @@ class DistributedTrainer:
 
         handle_losses = None
         handle_counts = None
+        losses_tensor = None
+        counts_tensor = None
         if hasattr(self.unwrapped_model.loss, "pp_block"): # only true on outline pipeline stages
             loss_block = self.unwrapped_model.loss.pp_block
             if loss_block.has_per_domain_loss and dist.get_rank(self.parallel_context.tp_pg) == 0: # only need to do this once per tp stage
