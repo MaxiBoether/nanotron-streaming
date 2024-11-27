@@ -447,10 +447,14 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg, done_training = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, done_training, losses_tensor, counts_tensor = self.training_step(dataloader=self.current_dataloader)
                 if done_training: # If any process has run out of data, exit the loop gracefully
                     log_rank("Exiting training since some process has run out of data.", logger=logger, level=logging.WARNING, rank=0)
                     break
+                
+                # TODO(MaxiBoether): something like handle_mixtera_callback(losses_tensor, counts_tensor, self.current_dataloader, self.parallel_context.dp_pg.rank(), self.parallel_context.tp_pg.rank())
+                del losses_tensor
+                del counts_tensor
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -576,10 +580,6 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
-        # TODO what i also dont understand is: in the regular log case, that should only be avilable on the last pipeline stage as well, right? how is the loss logged then on rank 0 / how is it transferred around.
-        # train_step_logs directly prints the loss tensor, which would imply loss_avg is defined on pp 0
-        # need to investigate this with pp=2. what is loss, what is the pp stage? if pp=0 and loss is defined, why? is it is undefined, how does it get to the log? in the end, we need to move the losses/counts tensors (or dicts made out of it) to the mixtera server, in the best case from node 0, and hence we need to figure out how to get it there.
-
         handle_losses = None
         handle_counts = None
         if hasattr(self.unwrapped_model.loss, "pp_block"): # only true on outline pipeline stages
@@ -619,12 +619,10 @@ class DistributedTrainer:
         if handle_losses is not None:
             handle_losses.wait()
             handle_counts.wait()
-            avg_loss = torch.sum(losses_tensor) / torch.sum(counts_tensor)
-            log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}\navg_loss = {avg_loss.item()}", logger=logger, level=logging.WARNING)
 
         self.post_train_step()
 
-        return outputs, loss_avg, done_training
+        return outputs, loss_avg, done_training, losses_tensor, counts_tensor
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
