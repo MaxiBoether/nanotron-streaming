@@ -14,7 +14,6 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
-from collections import defaultdict
 from typing import Dict, List, Optional, Union
 
 import torch
