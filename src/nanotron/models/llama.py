@@ -958,12 +958,19 @@ class Loss(nn.Module):
     def __init__(self, tp_pg: dist.ProcessGroup):
         super().__init__()
         self.tp_pg = tp_pg
+        self._default_domains = 32
+        # We should not lazy init the loss tensor to support BFloat16 here.
+        self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.float32)
+        self.max_domain_id: Optional[torch.Tensor] = None 
+        self.counts_tensor: Optional[torch.Tensor] = None 
+        self.has_per_domain_loss = False
 
     def forward(
         self,
         sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
+        key_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
@@ -972,11 +979,64 @@ class Loss(nn.Module):
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
-        loss = masked_mean(loss, label_mask, dtype=torch.float)
+        final_loss = masked_mean(loss, label_mask, dtype=torch.float)
+
+        # BEGIN CHANGES FOR PER-KEY LOSS
+        if key_ids is not None:
+            with torch.no_grad():
+                self.has_per_domain_loss = True
+                # Lazy init, necessary because otherwise those couting tensors are converted to BFloat16.
+                self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=torch.int32) if self.max_domain_id is None else self.max_domain_id
+                self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64) if self.counts_tensor is None else self.counts_tensor
+
+                # Flatten tensors, i.e. remove batch dimensions etc
+                per_token_loss_flat = loss.view(-1)
+                domain_ids_flat = key_ids.view(-1)
+                label_mask_flat = label_mask.view(-1)
+
+                # Only consider valid positions (where label_mask is 1)
+                valid_positions = label_mask_flat.bool()
+                per_token_loss_flat = per_token_loss_flat[valid_positions]
+                domain_ids_flat = domain_ids_flat[valid_positions]
+
+                # Gather unique and max domain_ids
+                unique_domain_ids = domain_ids_flat.unique()
+                batch_max_domain_id = unique_domain_ids.max()
+
+                # Adjust tensors if necessary
+                if batch_max_domain_id > self.max_domain_id:
+                    self.max_domain_id = batch_max_domain_id
+                    self._default_domains = self.max_domain_id + 1 # Ensure that after reset, we don't necessarily resize again.
+
+                num_domains = self.max_domain_id + 1
+
+                if self.losses_tensor.size(0) < num_domains:
+                    new_size = num_domains - self.losses_tensor.size(0)
+                    self.losses_tensor = torch.cat(
+                        [self.losses_tensor,
+                         torch.zeros(new_size, dtype=torch.float32, device=self.losses_tensor.device)], dim=0)
+                    self.counts_tensor = torch.cat(
+                        [self.counts_tensor,
+                         torch.zeros(new_size, dtype=torch.int64, device=self.counts_tensor.device)], dim=0)
+
+                # Compute per-domain losses and counts
+                self.losses_tensor.index_add_(0, domain_ids_flat, per_token_loss_flat)
+                self.counts_tensor.index_add_(0, domain_ids_flat, torch.ones_like(domain_ids_flat, dtype=torch.int64))
+        # END CHANGES FOR PER-KEY LOSS
+
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
-        return {"loss": loss}
+        return {"loss": final_loss}
+    
+    def get_per_domain_stats(self):
+        return self.losses_tensor.clone(), self.counts_tensor.clone(), self.max_domain_id.clone()
 
+    def reset_per_domain_stats(self):
+        self.losses_tensor = torch.zeros(self._default_domains, device='cuda', dtype=self.losses_tensor.dtype)
+        self.max_domain_id = torch.tensor(self._default_domains, device='cuda', dtype=self.max_domain_id.dtype)
+        self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=self.counts_tensor.dtype)
+        assert self.max_domain_id.dtype == torch.int32
+        assert self.counts_tensor.dtype == torch.int64
 
 class LlamaForTraining(NanotronModel):
     def __init__(
@@ -996,6 +1056,7 @@ class LlamaForTraining(NanotronModel):
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
+                "key_ids"
             },
             module_output_keys={"loss"},
         )
@@ -1009,7 +1070,10 @@ class LlamaForTraining(NanotronModel):
         input_mask: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
+        **kwargs
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        key_ids = kwargs.get("key_ids", None)
+
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,
@@ -1018,6 +1082,7 @@ class LlamaForTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
+            key_ids=key_ids
         )["loss"]
         return {"loss": loss}
 

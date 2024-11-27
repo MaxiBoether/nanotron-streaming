@@ -447,10 +447,14 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg, done_training = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, done_training, losses_tensor, counts_tensor = self.training_step(dataloader=self.current_dataloader)
                 if done_training: # If any process has run out of data, exit the loop gracefully
                     log_rank("Exiting training since some process has run out of data.", logger=logger, level=logging.WARNING, rank=0)
                     break
+                
+                # TODO(MaxiBoether): something like handle_mixtera_callback(losses_tensor, counts_tensor, self.current_dataloader, self.parallel_context.dp_pg.rank(), self.parallel_context.tp_pg.rank())
+                del losses_tensor
+                del counts_tensor
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -576,6 +580,32 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
+        handle_losses = None
+        handle_counts = None
+        losses_tensor = None
+        counts_tensor = None
+        if hasattr(self.unwrapped_model.loss, "pp_block"): # only true on outline pipeline stages
+            loss_block = self.unwrapped_model.loss.pp_block
+            if loss_block.has_per_domain_loss and dist.get_rank(self.parallel_context.tp_pg) == 0: # only need to do this once per tp stage
+                with torch.no_grad():
+                    losses_tensor, counts_tensor, max_id_tensor = loss_block.get_per_domain_stats()
+                    max_handle = dist.all_reduce(max_id_tensor, op=dist.ReduceOp.MAX, async_op=True, group=self.parallel_context.dp_pg)
+                    self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
+                    # Debug log, adds synchronization
+                    # log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}\nmax_id_tensor = {max_id_tensor}", logger=logger, level=logging.WARNING)
+                    max_handle.wait()
+                    max_domain_id = max_id_tensor.item()
+                    # Resize tensors to the maximum domain ID
+                    if losses_tensor.size(0) < max_domain_id + 1:
+                        new_size = max_domain_id + 1 - losses_tensor.size(0)
+                        losses_tensor = torch.cat(
+                            [losses_tensor, torch.zeros(new_size, dtype=losses_tensor.dtype, device=losses_tensor.device)], dim=0)
+                        counts_tensor = torch.cat(
+                            [counts_tensor, torch.zeros(new_size, dtype=counts_tensor.dtype, device=counts_tensor.device)], dim=0)
+
+                    handle_losses = dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
+                    handle_counts = dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, async_op=True, group=self.parallel_context.dp_pg)
+
         # Apply gradient
         self.optimizer.step()
         self.optimizer.zero_grad()
@@ -588,9 +618,13 @@ class DistributedTrainer:
         if handle is not None:
             handle.wait()
 
+        if handle_losses is not None:
+            handle_losses.wait()
+            handle_counts.wait()
+
         self.post_train_step()
 
-        return outputs, loss_avg, done_training
+        return outputs, loss_avg, done_training, losses_tensor, counts_tensor
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
