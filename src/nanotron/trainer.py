@@ -515,7 +515,7 @@ class DistributedTrainer:
             done_training = True
             outputs = None
             loss_avg = None
-            return outputs, loss_avg, done_training
+            return outputs, loss_avg, done_training, None, None
         else:
             done_training = False
 
