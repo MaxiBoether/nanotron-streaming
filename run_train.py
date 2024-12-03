@@ -193,7 +193,7 @@ def get_dataloader_from_data_stage(
         from mixtera.hf import MixteraHFDataset
         from mixtera.core.client import MixteraClient, QueryExecutionArgs, ResultStreamingArgs
         from mixtera.core.query import Query
-        from mixtera.core.query.mixture import InferringMixture
+        from mixtera.core.query.mixture import InferringMixture, StaticMixture, MixtureKey
 
         if data.dataset.port:
             client = MixteraClient.from_remote(data.dataset.path, data.dataset.port)
@@ -218,7 +218,42 @@ def get_dataloader_from_data_stage(
         node_id = trainer.parallel_context.mp_pg.rank()
         logger.info(f"There are {total_nodes} total nodes, {data_parallel_size} dp size => {nodes_per_dp_group} nodes per DP group. My dp group is {dp_group_id}, my node id is {node_id}")
         assert node_id < nodes_per_dp_group, f"node_id = {node_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
+        """
+        # Begin idea
+        class MixteraADOCallback:
+            pass
+        client.register_callback(MixteraADOCallback, "MixteraADOCallback") # store at server in database? do we have a default set of callbacks we store in the database? how do we do it with metadata parsers?
+        # InferringMixture may not be ArbitraryMixture, needs to be not None for mixture in rows, but when to check? because inferring needs to be informed first.
+        mixture = DynamicMixture(chunk_size=chunk_size, initial_mixture=InferringMixture/StaticMixture, callback="MixteraADOCallback") # needs to handle pickling/unpicklign to correctly instantiate callback at server.
+        # for each result chunk we still have a static mixtuer, but in handle_mixtera_callback, we send the loss/count data to the server, and the queryresult will call mixture.inform_domain_losses(data, key_id_map), and the mixture calls the callback. the dynamicmixture basically wraps around the callback, is able to yield the current mixture from callback/initial mixture correctly, and adheres to the interface, while the callback actually implements the algorithm and works using indices, and the mixture converts the indexed-based decisions to mixturekeys.
+        """
 
+        # The Pile
+        mixture = StaticMixture(chunk_size=chunk_size, mixture={
+            MixtureKey({"pile_set_name": ["FreeLaw"]}): 0.04493927695030662,
+            MixtureKey({"pile_set_name": ["Enron Emails"]}): 0.000998021865918546,
+            MixtureKey({"pile_set_name": ["Github"]}): 0.12267758913758665,
+            MixtureKey({"pile_set_name": ["OpenSubtitles"]}): 0.015835745965429738,
+            MixtureKey({"pile_set_name": ["PubMed Central"]}): 0.12148621531516873,
+            MixtureKey({"pile_set_name": ["OpenWebText2"]}): 0.10960682218906206,
+            MixtureKey({"pile_set_name": ["StackExchange"]}): 0.049107965728456646,
+            MixtureKey({"pile_set_name": ["Pile-CC"]}): 0.1824984780261193,
+            MixtureKey({"pile_set_name": ["ArXiv"]}): 0.08862621733009907,
+            MixtureKey({"pile_set_name": ["USPTO Backgrounds"]}): 0.02616577419097875,
+            MixtureKey({"pile_set_name": ["Books3"]}): 0.10458626728299704,
+            MixtureKey({"pile_set_name": ["Wikipedia (en)"]}): 0.04016661238580172,
+            MixtureKey({"pile_set_name": ["PubMed Abstracts"]}): 0.02212837481440004,
+            MixtureKey({"pile_set_name": ["NIH ExPorter"]}): 0.0018685647881937016,
+            MixtureKey({"pile_set_name": ["BookCorpus2"]}): 0.006327357399975309,
+            MixtureKey({"pile_set_name": ["EuroParl"]}): 0.008072738376112661,
+            MixtureKey({"pile_set_name": ["HackerNews"]}): 0.004731183407655429,
+            MixtureKey({"pile_set_name": ["DM Mathematics"]}): 0.019084626704901235,
+            MixtureKey({"pile_set_name": ["YoutubeSubtitles"]}): 0.004027438721554198,
+            MixtureKey({"pile_set_name": ["PhilPapers"]}): 0.0026731438901686708,
+            MixtureKey({"pile_set_name": ["Ubuntu IRC"]}): 0.004850316881507234,
+            MixtureKey({"pile_set_name": ["Gutenberg (PG-19)"]}): 0.0195412686476066,
+        })
+        
         query_execution_args = QueryExecutionArgs(mixture=InferringMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
         streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
 
@@ -249,6 +284,7 @@ def get_dataloader_from_data_stage(
             dataset_overwrite_cache=False, # will be ignored
             sequence_length=trainer.sequence_length,
             batch_size=chunk_size // 4 # We set the batch size to 25% of chunk size. We don't want this to be higher than the chunk size because otherwise we will prefetch chunks implicitly!
+            return_key_ids=False # TODO set true if mixture is dynamic else false
         )
 
         # We load the processed dataset on the ranks requiring it
