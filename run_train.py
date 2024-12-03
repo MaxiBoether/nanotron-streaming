@@ -253,7 +253,7 @@ def get_dataloader_from_data_stage(
             MixtureKey({"pile_set_name": ["Ubuntu IRC"]}): 0.004850316881507234,
             MixtureKey({"pile_set_name": ["Gutenberg (PG-19)"]}): 0.0195412686476066,
         })
-        
+
         query_execution_args = QueryExecutionArgs(mixture=InferringMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
         streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
 
@@ -283,7 +283,7 @@ def get_dataloader_from_data_stage(
             dataset_processing_num_proc_per_process=-1, # will be ignored
             dataset_overwrite_cache=False, # will be ignored
             sequence_length=trainer.sequence_length,
-            batch_size=chunk_size // 4 # We set the batch size to 25% of chunk size. We don't want this to be higher than the chunk size because otherwise we will prefetch chunks implicitly!
+            batch_size=chunk_size // 4, # We set the batch size to 25% of chunk size. We don't want this to be higher than the chunk size because otherwise we will prefetch chunks implicitly!
             return_key_ids=False # TODO set true if mixture is dynamic else false
         )
 
