@@ -1,0 +1,101 @@
+checkpoints:
+  checkpoint_interval: 1000
+  checkpoints_path: /pub/nfs-data/mboether/mixtera/ado_124m
+  checkpoints_path_is_shared_file_system: true
+  resume_checkpoint_path: null
+  save_initial_state: true
+  save_final_state: true
+data_stages:
+- data:
+    dataset:
+      path: localhost
+      port: 8888
+      job_id: ado_124m_pileweights
+      chunk_size: 1000
+      tunnel_via_server: false
+      chunk_reading_degree_of_parallelism: 1
+      chunk_reading_per_window_mixture: False
+      chunk_reading_window_size: 512
+    num_loading_workers: 4
+    seed: 1234
+  name: Stable Training Stage
+  start_training_step: 1
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: ado_124m # wandb project name
+  run: mixtera_bench_%date_%jobid
+  seed: 42
+  step: null
+lighteval: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    std: 0.025
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 0
+    eos_token_id: 0
+    hidden_act: silu
+    hidden_size: 768
+    initializer_range: 0.02
+    intermediate_size: 2048
+    is_llama_config: true
+    max_position_embeddings: 1024 # equal to sequence length
+    num_attention_heads: 12
+    num_hidden_layers: 12
+    num_key_value_heads: 12
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    tie_word_embeddings: true
+    use_cache: true
+    vocab_size: 50432
+optimizer:
+  accumulate_grad_in_fp32: true
+  clip_grad: 1.0
+  weight_decay: 0.1
+  zero_stage: 0
+  learning_rate_scheduler:
+    learning_rate: 0.0004
+    lr_decay_starting_step: 1111 # todo cosine + 80% of total 
+    lr_decay_steps: 1111 # todo = train steps 
+    lr_decay_style: cosine
+    lr_warmup_steps: 1111 # # todo max(1% of total steps, 2000)
+    lr_warmup_style: linear
+    min_decay_lr: 4.0e-05 # 10% of learning rate
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adamW
+    torch_adam_is_fused: true
+parallelism:
+  dp: 4
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  tp: 1
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: EleutherAI/gpt-neox-20b
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 4 # with dp = 4 should be 64 / microbatch size
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 16 #TODO - validate that i defined a ~124M model and then check maximum microbatch size for H100.
+  # global batch size = micro batch size * accumulation * dp * sequence length. should be 262144 tokens/batch to match paper (paper has sq = 1024 and global batch size=256) 
+  sequence_length: 1024
+  train_steps: 111111 # todo
+  val_check_interval: -1
