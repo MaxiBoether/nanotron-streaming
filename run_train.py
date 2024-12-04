@@ -254,7 +254,9 @@ def get_dataloader_from_data_stage(
             MixtureKey({"pile_set_name": ["Gutenberg (PG-19)"]}): 0.0195412686476066,
         })
 
-        query_execution_args = QueryExecutionArgs(mixture=InferringMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
+        mixthre
+
+        query_execution_args = QueryExecutionArgs(mixture=mixture, dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
         streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
 
         query = Query.for_job(job_id)

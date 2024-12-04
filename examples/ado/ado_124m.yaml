@@ -11,12 +11,12 @@ data_stages:
       path: localhost
       port: 8888
       job_id: ado_124m_pileweights
-      chunk_size: 1024 # needs to be at least 1002 such that all pile weights have at least 1 item.
+      chunk_size: 512 # needs to be at least 1002 such that all pile weights have at least 1 item.
       tunnel_via_server: false
       chunk_reading_degree_of_parallelism: 1
       chunk_reading_per_window_mixture: False
       chunk_reading_window_size: 512
-    num_loading_workers: 4
+    num_loading_workers: 2
     seed: 1234
   name: Stable Training Stage
   start_training_step: 1
@@ -65,10 +65,10 @@ optimizer:
   zero_stage: 0
   learning_rate_scheduler:
     learning_rate: 0.0004
-    lr_decay_starting_step: 46000 # 80% of total 
+    lr_decay_starting_step: 48000 # 80% of total 
     lr_decay_steps: 12000 # total train steps - lr_decay_starting_step
     lr_decay_style: cosine
-    lr_warmup_steps: 580 # # todo max(1% of total steps, 2000)
+    lr_warmup_steps: 600 # # todo max(1% of total steps, 2000)
     lr_warmup_style: linear
     min_decay_lr: 4.0e-05 # 10% of learning rate
   optimizer_factory:
@@ -97,5 +97,5 @@ tokens:
   micro_batch_size: 16 # RTX 3090: batch size 16
   # global batch size = micro batch size * accumulation * dp * sequence length. should be 262144 tokens/batch to match paper (paper has sq = 1024 and global batch size=256) 
   sequence_length: 1024
-  train_steps: 58000 # a bit more than 15 billion tokens (with 262144 tokens/batch)
+  train_steps: 60000 # 15,7 billion tokens (with 262144 tokens/batch)
   val_check_interval: -1
