@@ -194,6 +194,8 @@ def get_dataloader_from_data_stage(
         from mixtera.core.client import MixteraClient, QueryExecutionArgs, ResultStreamingArgs
         from mixtera.core.query import Query
         from mixtera.core.query.mixture import InferringMixture, StaticMixture, MixtureKey
+        from mixtera.core.query.mixture.dynamic_mixture import DynamicMixture
+        from mixtera.core.algo.ado.ado import AdoDynamicMixing
 
         if data.dataset.port:
             client = MixteraClient.from_remote(data.dataset.path, data.dataset.port)
@@ -229,7 +231,7 @@ def get_dataloader_from_data_stage(
         """
 
         # The Pile
-        mixture = StaticMixture(chunk_size=chunk_size, mixture={
+        mixture_pile_static = StaticMixture(chunk_size=chunk_size, mixture={
             MixtureKey({"pile_set_name": ["FreeLaw"]}): 0.04493927695030662,
             MixtureKey({"pile_set_name": ["Enron Emails"]}): 0.000998021865918546,
             MixtureKey({"pile_set_name": ["Github"]}): 0.12267758913758665,
@@ -254,9 +256,9 @@ def get_dataloader_from_data_stage(
             MixtureKey({"pile_set_name": ["Gutenberg (PG-19)"]}): 0.0195412686476066,
         })
 
-        mixthre
+        mixture_ado = DynamicMixture(chunk_size=chunk_size, initial_mixture=mixture_pile_static, mixing_alg=AdoDynamicMixing(variant="vanilla"))
 
-        query_execution_args = QueryExecutionArgs(mixture=mixture, dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
+        query_execution_args = QueryExecutionArgs(mixture=mixture_pile_static, dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
         streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
 
         query = Query.for_job(job_id)
