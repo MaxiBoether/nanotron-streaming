@@ -456,6 +456,8 @@ class DistributedTrainer:
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
+                dist.barrier() # to tempoarrily support mixtera checkpoint loading
+
                 # Training step
                 outputs, loss_avg, done_training, losses_tensor, counts_tensor = self.training_step(dataloader=self.current_dataloader)
                 if done_training: # If any process has run out of data, exit the loop gracefully
