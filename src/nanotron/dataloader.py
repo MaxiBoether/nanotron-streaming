@@ -334,13 +334,15 @@ def clm_process(
         assert isinstance(texts[0][0], int)
         for ids in texts:
             assert len(ids) == sequence_length + 1
+            assert not any(item is None for item in ids), f"ids = {ids}"
 
         if keys is not None:
             assert isinstance(keys[0], list)
             assert isinstance(keys[0][0], int)
             for key in keys:
                 assert len(key) == sequence_length + 1
-        
+                assert not any(item is None for item in key)
+
         return {"input_ids": texts, "key_ids": keys}
 
     # some args not supported by the IterableDataset
