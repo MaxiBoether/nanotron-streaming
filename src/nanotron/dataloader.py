@@ -446,7 +446,7 @@ class DataCollatorForCLM:
         result["label_mask"] = TensorPointer(group_rank=self.output_pp_rank)
         if have_key_ids:
             key_ids = np.vstack([example["key_ids"] for example in examples])
-            assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape}"
+            assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape} \n\n {input_ids} \n\n {key_ids}"
             result["key_ids"] = TensorPointer(group_rank=self.output_pp_rank)
 
         assert (
