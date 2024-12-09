@@ -312,23 +312,34 @@ def clm_process(
         return result
 
     def _tokenize_and_group_texts(texts: List[str], keys: List[int] = None) -> Dict[str, List[np.ndarray]]:
-        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
-        # At this point, tokenized_batch is a dictionary with keys like 'input_ids', 'attention_mask' etc.
-        # tokenized_batch['input_ids'] is a list of lists, where each inner list contains token IDs for one input text.
-        input_ids_list = tokenized_batch['input_ids']
-        input_ids_array = np.concatenate([np.array(ids) for ids in input_ids_list])
-        examples = { "input_ids": input_ids_array }
+        if isinstance(texts[0], str):
+            tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+            # At this point, tokenized_batch is a dictionary with keys like 'input_ids', 'attention_mask' etc.
+            # tokenized_batch['input_ids'] is a list of lists, where each inner list contains token IDs for one input text.
+            input_ids_list = tokenized_batch['input_ids']
+            input_ids_array = np.concatenate([np.array(ids) for ids in input_ids_list])
+            examples = { "input_ids": input_ids_array }
+            
+            if keys is not None:
+                # Similarly, create domain_ids_array using vectorized operations
+                lengths = np.array([len(ids) for ids in input_ids_list])
+                keys_array = np.array(keys)
+                domain_ids_array = np.repeat(keys_array, lengths)
+                examples["key_ids"] = domain_ids_array
+
+            grouped = group_texts(examples)
+            return grouped
         
+        assert isinstance(texts[0], list)
+        assert isinstance(texts[0][0], int)
+        for ids in texts:
+            assert len(ids) == sequence_length + 1
+
         if keys is not None:
-            # Similarly, create domain_ids_array using vectorized operations
-            lengths = np.array([len(ids) for ids in input_ids_list])
-            keys_array = np.array(keys)
-            domain_ids_array = np.repeat(keys_array, lengths)
-            examples["key_ids"] = domain_ids_array
-
-        grouped = group_texts(examples)
-        return grouped
-
+            for key in keys:
+                assert len(key) == sequence_length + 1
+        
+        return {"input_ids": texts, "key_ids": keys}
 
     # some args not supported by the IterableDataset
     additional_args = {"num_proc": dataset_processing_num_proc_per_process, "load_from_cache_file": not dataset_overwrite_cache, "desc": f"Grouping texts in chunks of {sequence_length+1}"} if not isinstance(raw_dataset, IterableDataset) else {}
@@ -349,7 +360,13 @@ def clm_process(
         # Hence, for the streaming case you probably want to lower this
         additional_args["batch_size"] = batch_size
 
-    input_columns = [text_column_name]
+    input_columns = []
+    if "input_ids" in raw_dataset.column_names:
+        input_columns = ["input_ids"]
+    else:
+        # Data contains 'text', need to tokenize
+        input_columns = [text_column_name]
+
     def mapping_function(texts):
         return _tokenize_and_group_texts(texts)
     
@@ -358,7 +375,7 @@ def clm_process(
     if return_key_ids:
         if "key_id" in raw_dataset.column_names:
             # Provided by e.g. Mixtera.
-            input_columns = [text_column_name, 'key_id']
+            input_columns.append('key_id')
             def mapping_function(texts, keys):
                 return _tokenize_and_group_texts(texts, keys)
             features["key_ids"] = Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)
