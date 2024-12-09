@@ -343,7 +343,10 @@ def clm_process(
                 assert len(key) == sequence_length + 1
                 assert not any(item is None for item in key)
 
-        return {"input_ids": texts, "key_ids": keys}
+        result = {"input_ids": np.array(texts), "key_ids": np.array(keys)}
+        logger.debug(f"returning {result}")
+
+        return result
 
     # some args not supported by the IterableDataset
     additional_args = {"num_proc": dataset_processing_num_proc_per_process, "load_from_cache_file": not dataset_overwrite_cache, "desc": f"Grouping texts in chunks of {sequence_length+1}"} if not isinstance(raw_dataset, IterableDataset) else {}
