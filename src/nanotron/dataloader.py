@@ -336,6 +336,8 @@ def clm_process(
             assert len(ids) == sequence_length + 1
 
         if keys is not None:
+            assert isinstance(keys[0], list)
+            assert isinstance(keys[0][0], int)
             for key in keys:
                 assert len(key) == sequence_length + 1
         
