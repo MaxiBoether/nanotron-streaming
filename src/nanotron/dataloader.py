@@ -335,6 +335,7 @@ def clm_process(
         for ids in texts:
             assert len(ids) == sequence_length + 1
             assert not any(item is None for item in ids), f"ids = {ids}"
+        result = {"input_ids": texts}
 
         if keys is not None:
             assert isinstance(keys[0], list)
@@ -343,8 +344,7 @@ def clm_process(
                 assert len(key) == sequence_length + 1
                 assert not any(item is None for item in key)
 
-        result = {"input_ids": np.array(texts), "key_ids": np.array(keys)}
-        logger.debug(f"returning {result}")
+            result["key_ids"] = keys
 
         return result
 
@@ -389,11 +389,14 @@ def clm_process(
         else:
             raise RuntimeError(f"return_key_ids = True but input column names do not contain key_id: {raw_dataset.column_names}")
 
+    remove_columns = raw_dataset.column_names
+    if "input_ids" in remove_columns:
+        remove_columns.remove("input_ids")
 
     train_dataset = raw_dataset.map(
         mapping_function,
         input_columns=input_columns,
-        remove_columns=raw_dataset.column_names,
+        remove_columns=remove_columns,
         features=Features(features),
         batched=True,
         **additional_args
@@ -451,7 +454,7 @@ class DataCollatorForCLM:
         result["label_mask"] = TensorPointer(group_rank=self.output_pp_rank)
         if have_key_ids:
             key_ids = np.vstack([example["key_ids"] for example in examples])
-            assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape} \n\n {input_ids} \n\n {key_ids}"
+            assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape}"
             result["key_ids"] = TensorPointer(group_rank=self.output_pp_rank)
 
         assert (
