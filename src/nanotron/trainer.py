@@ -98,6 +98,7 @@ from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer, state_dict_to_device
 
 from mixtera.utils.checkpoint import handle_mixtera_checkpoint
+from mixtera.utils.feedback import handle_mixtera_feedback
 
 logger = logging.get_logger(__name__)
 
@@ -455,15 +456,15 @@ class DistributedTrainer:
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
+                dist.barrier() # to tempoarrily support mixtera checkpoint loading
+
                 # Training step
                 outputs, loss_avg, done_training, losses_tensor, counts_tensor = self.training_step(dataloader=self.current_dataloader)
                 if done_training: # If any process has run out of data, exit the loop gracefully
                     log_rank("Exiting training since some process has run out of data.", logger=logger, level=logging.WARNING, rank=0)
                     break
                 
-                # TODO(MaxiBoether): something like handle_mixtera_callback(losses_tensor, counts_tensor, self.current_dataloader, self.parallel_context.dp_pg.rank(), self.parallel_context.tp_pg.rank())
-                del losses_tensor
-                del counts_tensor
+                handle_mixtera_feedback(self.current_dataloader, self.iteration_step, losses_tensor, counts_tensor, self.parallel_context.dp_pg.rank(), self.parallel_context.tp_pg.rank())
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -515,7 +516,7 @@ class DistributedTrainer:
             done_training = True
             outputs = None
             loss_avg = None
-            return outputs, loss_avg, done_training
+            return outputs, loss_avg, done_training, None, None
         else:
             done_training = False
 

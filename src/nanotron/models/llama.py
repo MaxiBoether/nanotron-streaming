@@ -990,9 +990,9 @@ class Loss(nn.Module):
                 self.counts_tensor = torch.zeros(self._default_domains, device='cuda', dtype=torch.int64) if self.counts_tensor is None else self.counts_tensor
 
                 # Flatten tensors, i.e. remove batch dimensions etc
-                per_token_loss_flat = loss.view(-1)
-                domain_ids_flat = key_ids.view(-1)
-                label_mask_flat = label_mask.view(-1)
+                per_token_loss_flat = loss.reshape(-1)
+                domain_ids_flat = key_ids.reshape(-1)
+                label_mask_flat = label_mask.reshape(-1)
 
                 # Only consider valid positions (where label_mask is 1)
                 valid_positions = label_mask_flat.bool()
